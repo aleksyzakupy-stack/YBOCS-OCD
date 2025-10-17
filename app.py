@@ -40,9 +40,7 @@ def admin_create_user_ui(config: dict, authenticator: stauth.Authenticate):
         first_name = st.text_input("Imię", max_chars=50)
         surname_letters = st.text_input("Pierwsze trzy litery nazwiska", max_chars=3)
         login = st.text_input("Login", max_chars=32)
-        password = st.text_input("Hasło", type="password")
-        password_repeat = st.text_input("Powtórz hasło", type="password")
-        submitted = st.form_submit_button("Zarejestruj")
+        submitted = st.form_submit_button("Zapisz konto")
 
     if not submitted:
         return
@@ -60,11 +58,6 @@ def admin_create_user_ui(config: dict, authenticator: stauth.Authenticate):
         errors.append("Login jest wymagany.")
     elif login_clean in config['credentials']['usernames']:
         errors.append("Taki login już istnieje.")
-    if not password:
-        errors.append("Hasło jest wymagane.")
-    elif password != password_repeat:
-        errors.append("Hasła muszą być identyczne.")
-
     if errors:
         for err in errors:
             st.error(err)
@@ -78,6 +71,7 @@ def admin_create_user_ui(config: dict, authenticator: stauth.Authenticate):
         "name": display_name,
         "password": hashed_password,
         "role": "user",
+        "force_password_reset": True,
     }
 
     save_credentials(config)
@@ -389,6 +383,38 @@ elif authentication_status is None:
     st.stop()
 
 role = credentials['credentials']['usernames'].get(username, {}).get("role", "user")
+user_record = credentials['credentials']['usernames'].get(username, {})
+
+if user_record.get("force_password_reset"):
+    st.warning(
+        "To Twoje pierwsze logowanie. Ustaw nowe hasło, aby kontynuować korzystanie z aplikacji."
+    )
+
+    with st.form(f"force_password_reset_{username}"):
+        new_password = st.text_input("Nowe hasło", type="password")
+        new_password_repeat = st.text_input("Powtórz nowe hasło", type="password")
+        submitted = st.form_submit_button("Ustaw hasło")
+
+    if submitted:
+        errors = []
+        if not new_password:
+            errors.append("Hasło nie może być puste.")
+        if new_password != new_password_repeat:
+            errors.append("Hasła muszą być identyczne.")
+
+        if errors:
+            for err in errors:
+                st.error(err)
+        else:
+            user_record["password"] = stauth.Hasher.hash(new_password)
+            user_record["force_password_reset"] = False
+            save_credentials(credentials)
+            if hasattr(authenticator, "credentials"):
+                authenticator.credentials = credentials['credentials']
+            st.session_state["password_reset_done"] = "Hasło zostało ustawione. Możesz kontynuować pracę w aplikacji."
+            st.rerun()
+
+    st.stop()
 
 # ---------- UI ----------
 st.title(APP_TITLE)
