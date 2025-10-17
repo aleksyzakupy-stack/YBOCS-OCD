@@ -7,6 +7,7 @@ from datetime import datetime, date
 import json
 from pathlib import Path
 import matplotlib.pyplot as plt
+import hashlib
 
 APP_TITLE = "Ocena nasilenia OCD – Y‑BOCS (PL)"
 DATA_DIR = Path("data")
@@ -31,17 +32,18 @@ def save_credentials(config: dict):
         yaml.safe_dump(config, f, allow_unicode=True, sort_keys=False)
 
 
-def register_user_ui(config: dict, authenticator: stauth.Authenticate):
-    st.subheader("Rejestracja użytkownika")
-    st.caption("Podaj imię, trzy pierwsze litery nazwiska, unikalny login oraz hasło.")
+def admin_create_user_ui(config: dict, authenticator: stauth.Authenticate):
+    st.subheader("Dodaj nowego pacjenta")
+    st.caption(
+        "Podaj dane pacjenta. Przy pierwszym logowaniu pacjent wpisze własne hasło, "
+        "pozostawiając pole hasła w formularzu logowania puste."
+    )
 
     with st.form("register_form"):
         first_name = st.text_input("Imię", max_chars=50)
         surname_letters = st.text_input("Pierwsze trzy litery nazwiska", max_chars=3)
         login = st.text_input("Login", max_chars=32)
-        password = st.text_input("Hasło", type="password")
-        password_repeat = st.text_input("Powtórz hasło", type="password")
-        submitted = st.form_submit_button("Zarejestruj")
+        submitted = st.form_submit_button("Zapisz konto")
 
     if not submitted:
         return
@@ -59,33 +61,31 @@ def register_user_ui(config: dict, authenticator: stauth.Authenticate):
         errors.append("Login jest wymagany.")
     elif login_clean in config['credentials']['usernames']:
         errors.append("Taki login już istnieje.")
-    if not password:
-        errors.append("Hasło jest wymagane.")
-    elif password != password_repeat:
-        errors.append("Hasła muszą być identyczne.")
-
     if errors:
         for err in errors:
             st.error(err)
         return
 
     display_name = f"{first_name_clean.title()} {letters_clean.upper()}"
-    hashed_password = stauth.Hasher([password]).generate()[0]
+    hashed_password = stauth.Hasher.hash("")
 
     config['credentials']['usernames'][login_clean] = {
         "email": f"{login_clean}@example.com",
         "name": display_name,
         "password": hashed_password,
         "role": "user",
+        "force_password_reset": True,
     }
 
     save_credentials(config)
     if hasattr(authenticator, "credentials"):
         authenticator.credentials = config['credentials']
 
-    st.success("Konto zostało utworzone. Możesz się teraz zalogować.")
-    st.session_state["just_registered_user"] = login_clean
-    st.experimental_rerun()
+    st.success(
+        f"Dodano pacjenta **{display_name}** (login: {login_clean}). "
+        "Przekaż login i poinformuj o pustym haśle przy pierwszym logowaniu."
+    )
+    st.rerun()
 
 def get_user_dir(username: str) -> Path:
     d = USER_STORE / username
@@ -106,6 +106,66 @@ def load_user_symptoms(username: str) -> list:
 
 def save_user_symptoms(username: str, symptoms: list):
     user_symptoms_file(username).write_text(json.dumps(symptoms, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def widget_key_for(username: str, raw_key: str) -> str:
+    """Generate a stable, unique widget key for Streamlit elements."""
+    digest = hashlib.sha1(f"{username}:{raw_key}".encode("utf-8")).hexdigest()
+    return f"widget_{digest}"
+
+
+def render_symptom_editor(target_username: str):
+    st.caption('Zaznacz objawy dotyczące pacjenta. Zapis nastąpi po kliknięciu „Zapisz objawy”.')
+
+    user_list = load_user_symptoms(target_username)
+    selected = set(user_list)
+
+    widget_user = target_username or "anon"
+    for group, items in SYMPTOMS.items():
+        with st.expander(group, expanded=False):
+            new_vals = []
+            group_prefix = f"{group}:"
+            inne_key = f"{group}:Inne (dopisz w polu poniżej)"
+            custom_entries = [k for k in selected if k.startswith(f"{group}:INNE:")]
+            stored_custom_text = custom_entries[0].split(":", 2)[2] if custom_entries else ""
+            inne_selected_stored = inne_key in selected
+            inne_default_checked = inne_selected_stored or bool(custom_entries)
+
+            for it in items:
+                base_key = f"{group}:{it}"
+                widget_key = widget_key_for(widget_user, base_key)
+                if it.startswith("Inne"):
+                    checked = st.checkbox(it, value=inne_default_checked, key=widget_key)
+                    text_key = f"{widget_key}_text"
+                    if checked:
+                        custom_input = st.text_input(
+                            f"Inne – {group}",
+                            value=stored_custom_text,
+                            placeholder="Opisz własnymi słowami…",
+                            key=text_key,
+                        )
+                        custom_input_clean = custom_input.strip()
+                        if custom_input_clean:
+                            new_vals.append(f"{group}:INNE:{custom_input_clean}")
+                        else:
+                            new_vals.append(inne_key)
+                    else:
+                        if text_key in st.session_state:
+                            st.session_state.pop(text_key)
+                else:
+                    checked = st.checkbox(it, value=(base_key in selected), key=widget_key)
+                    if checked:
+                        new_vals.append(base_key)
+
+            for k in list(selected):
+                if k.startswith(group_prefix):
+                    selected.discard(k)
+            for k in new_vals:
+                selected.add(k)
+
+    if st.button("Zapisz objawy", type="primary", key=f"save_symptoms_{target_username}"):
+        save_user_symptoms(target_username, sorted(selected))
+        st.success("Zapisano listę objawów.")
 
 def init_results_file():
     if not RESULTS_FILE.exists():
@@ -303,30 +363,73 @@ authenticator = stauth.Authenticate(
     cookie_expiry_days=7
 )
 
-login_response = authenticator.login("Zaloguj się", "main")
+authenticator.login(
+    location="main",
+    fields={
+        "Form name": "Zaloguj się",
+        "Username": "Login",
+        "Password": "Hasło",
+        "Login": "Zaloguj się"
+    }
+)
 
-if login_response is None:
-    name = ""
-    username = ""
-    authentication_status = None
-else:
-    name, authentication_status, username = login_response
+name = st.session_state.get("name", "")
+username = st.session_state.get("username", "")
+authentication_status = st.session_state.get("authentication_status")
+
 st.subheader("Zaloguj się")
-name, authentication_status, username = authenticator.login(location="main")
+
+reset_msg = st.session_state.pop("password_reset_done", None)
+if reset_msg:
+    st.success(reset_msg)
+
+st.caption(
+    "Nowi pacjenci logują się po raz pierwszy, pozostawiając pole hasła puste. "
+    "Po zalogowaniu zostaną poproszeni o ustawienie własnego hasła."
+)
 
 if authentication_status is False:
     st.error("Błędny login lub hasło.")
-    register_user_ui(credentials, authenticator)
+    st.info("Jeśli nie masz konta, skontaktuj się z administratorem aplikacji.")
     st.stop()
 elif authentication_status is None:
     st.info("Wprowadź dane logowania.")
-    if st.session_state.get("just_registered_user"):
-        st.success(f"Użytkownik **{st.session_state['just_registered_user']}** został utworzony. Zaloguj się.")
-        st.session_state.pop("just_registered_user")
-    register_user_ui(credentials, authenticator)
+    st.info("Jeśli nie masz konta, skontaktuj się z administratorem aplikacji.")
     st.stop()
 
 role = credentials['credentials']['usernames'].get(username, {}).get("role", "user")
+user_record = credentials['credentials']['usernames'].get(username, {})
+
+if user_record.get("force_password_reset"):
+    st.warning(
+        "To Twoje pierwsze logowanie. Ustaw nowe hasło, aby kontynuować korzystanie z aplikacji."
+    )
+
+    with st.form(f"force_password_reset_{username}"):
+        new_password = st.text_input("Nowe hasło", type="password")
+        new_password_repeat = st.text_input("Powtórz nowe hasło", type="password")
+        submitted = st.form_submit_button("Ustaw hasło")
+
+    if submitted:
+        errors = []
+        if not new_password:
+            errors.append("Hasło nie może być puste.")
+        if new_password != new_password_repeat:
+            errors.append("Hasła muszą być identyczne.")
+
+        if errors:
+            for err in errors:
+                st.error(err)
+        else:
+            user_record["password"] = stauth.Hasher.hash(new_password)
+            user_record["force_password_reset"] = False
+            save_credentials(credentials)
+            if hasattr(authenticator, "credentials"):
+                authenticator.credentials = credentials['credentials']
+            st.session_state["password_reset_done"] = "Hasło zostało ustawione. Możesz kontynuować pracę w aplikacji."
+            st.rerun()
+
+    st.stop()
 
 # ---------- UI ----------
 st.title(APP_TITLE)
@@ -334,201 +437,234 @@ authenticator.logout("Wyloguj", "sidebar")
 st.sidebar.write(f"Zalogowano: **{name}**  \nRola: **{role}**")
 
 if role == "admin":
-    tabs = st.tabs(["Wyniki pacjentów", "Panel admina"])
-else:
-    tabs = st.tabs(["Lista objawów", "Ocena nasilenia", "Wyniki"])
+    tabs = st.tabs(["Pacjenci", "Objawy pacjentów", "Wyniki pacjentów"])
+    patients_tab, symptoms_tab, results_tab = tabs
 
-if role != "admin":
-    # --- Tab 1: Lista objawów ---
-    with tabs[0]:
-        st.header("Lista objawów")
-        st.caption("Zaznacz objawy dotyczące pacjenta. Zapis nastąpi po kliknięciu „Zapisz”.")
+    with patients_tab:
+        st.header("Zarządzanie pacjentami")
+        admin_create_user_ui(credentials, authenticator)
 
-        user_list = load_user_symptoms(username)
-        selected = set(user_list)
+        st.subheader("Istniejące konta")
+        users_rows = []
+        for login, data in sorted(credentials['credentials']['usernames'].items()):
+            users_rows.append({
+                "Login": login,
+                "Nazwa": data.get("name", ""),
+                "Rola": data.get("role", "user"),
+                "Hasło ustawione": "Nie" if data.get("force_password_reset") else "Tak",
+            })
+        if users_rows:
+            users_df = pd.DataFrame(users_rows)
+            st.dataframe(users_df, width="stretch")
+        else:
+            st.info("Brak zarejestrowanych kont.")
 
-        for group, items in SYMPTOMS.items():
-            with st.expander(group, expanded=False):
-                new_vals = []
-                for it in items:
-                    key = f"{group}:{it}"
-                    checked = st.checkbox(it, value=(key in selected))
-                    if checked:
-                        new_vals.append(key)
-                # Handle "Inne" free text for each group
-                inne_key = f"{group}:Inne (dopisz w polu poniżej)"
-                if inne_key in new_vals:
-                    custom = st.text_input(f"Inne – {group}", value="", placeholder="Opisz własnymi słowami…")
-                    if custom.strip():
-                        new_vals.append(f"{group}:INNE:{custom.strip()}")
+    with symptoms_tab:
+        st.header("Objawy pacjentów")
+        patient_options = [
+            (login, data.get("name", login))
+            for login, data in sorted(credentials['credentials']['usernames'].items())
+            if data.get("role", "user") == "user"
+        ]
+        if not patient_options:
+            st.info('Brak pacjentów do konfiguracji. Dodaj konto w zakładce „Pacjenci”.')
+        else:
+            patient_lookup = dict(patient_options)
+            display_to_login = {f"{name} ({login})": login for login, name in patient_options}
+            labels = list(display_to_login.keys())
+            selected_label = st.selectbox(
+                "Pacjent",
+                ["— wybierz —"] + labels,
+                key="admin_symptoms_patient",
+            )
+            selected_patient = display_to_login.get(selected_label)
 
-                # merge new selections for this group
-                # remove stale keys of this group from selected, then add new
-                for k in list(selected):
-                    if k.startswith(f"{group}:"):
-                        selected.discard(k)
-                for k in new_vals:
-                    selected.add(k)
+            if selected_patient:
+                patient_name = patient_lookup[selected_patient]
+                st.markdown(f"**Wybrany pacjent:** {patient_name} ({selected_patient})")
+                render_symptom_editor(selected_patient)
 
-        if st.button("Zapisz", type="primary"):
-            save_user_symptoms(username, sorted(selected))
-            st.success("Zapisano listę objawów.")
+    with results_tab:
+        st.header("Wyniki pacjentów")
+        df = load_results()
+        if df.empty:
+            st.info("Brak wyników.")
+        else:
+            controls = st.columns(3)
 
-    # --- Tab 2: Ocena nasilenia ---
-    with tabs[1]:
-        st.header("Ocena nasilenia (Y‑BOCS)")
-        st.caption("Najpierw wybierz objaw z listy zaznaczonych wcześniej.")
+            with controls[0]:
+                filter_mode = st.radio("Zakres", ["Zakres dat", "Wybrany dzień"], horizontal=False)
+                if filter_mode == "Zakres dat":
+                    start = st.date_input("Od", value=pd.to_datetime(df["date"].min()).date())
+                    end = st.date_input("Do", value=pd.to_datetime(df["date"].max()).date())
+                else:
+                    single_day = st.date_input("Dzień", value=pd.to_datetime(df["date"].max()).date())
 
-        user_list = load_user_symptoms(username)
-
-        # Show only 'clean' labels to the user
-        def nice_label(raw: str) -> str:
-            if raw.startswith("Obsesje") or raw.startswith("Kompulsje") or raw.startswith("Rytyny") or raw.startswith("Obsesje religijne") or raw.startswith("Obsesje somatyczne"):
-                try:
-                    grp, it = raw.split(":", 1)
-                    if it.startswith("INNE:"):
-                        return f"{grp} – {it[5:]}"
-                    return f"{grp} – {it}"
-                except ValueError:
-                    return raw
-            else:
-                try:
-                    grp, it = raw.split(":", 1)
-                    if it.startswith("INNE:"):
-                        return f"{grp} – {it[5:]}"
-                    return f"{grp} – {it}"
-                except ValueError:
-                    return raw
-
-        options = {nice_label(o): o for o in user_list}
-        sel_label = st.selectbox("Objaw", ["— wybierz —"] + list(options.keys()))
-        selected_raw = options.get(sel_label)
-
-        if st.button("Wybierz", disabled=(selected_raw is None)):
-            st.session_state["selected_symptom"] = selected_raw
-
-        if st.session_state.get("selected_symptom"):
-            st.subheader("Kwestionariusz – ostatni tydzień")
-            q_vals = {}
-            for idx, (q, choices) in enumerate(YBOCS_ITEMS, start=1):
-                val = st.radio(
-                    f"{idx}. {q}",
-                    options=list(range(5)),
-                    format_func=lambda i, ch=choices: f"{i} – {ch[i]}",
-                    horizontal=True,
-                    key=f"q{idx}"
+            with controls[1]:
+                patient_options = [
+                    (login, data.get("name", login))
+                    for login, data in sorted(credentials['credentials']['usernames'].items())
+                    if data.get("role", "user") == "user"
+                ]
+                patient_display = {f"{name} ({login})": login for login, name in patient_options}
+                patient_labels = ["— wybierz —"] + list(patient_display.keys())
+                selected_label = st.selectbox(
+                    "Pacjent",
+                    patient_labels,
+                    key="admin_results_patient",
                 )
-                q_vals[f"q{idx}"] = int(val)
+                patient = patient_display.get(selected_label)
 
-            suma = sum(q_vals.values())
-            st.markdown(f"**Suma punktów: {suma} / 40**")
-
-            if st.button("Zapisz wynik", type="primary"):
-                row = {
-                    "timestamp": datetime.now().isoformat(timespec="seconds"),
-                    "date": date.today().isoformat(),
-                    "user": username,
-                    "role": role,
-                    "objaw": st.session_state["selected_symptom"],
-                    **{k: v for k, v in q_vals.items()},
-                    "suma": suma
-                }
-                append_result(row)
-                st.success("Wynik zapisany.")
-
-    results_tab_index = 2
-else:
-    results_tab_index = 0
-
-# --- Wyniki ---
-with tabs[results_tab_index]:
-    st.header("Wyniki pacjentów" if role == "admin" else "Wyniki")
-    df = load_results()
-    if df.empty:
-        st.info("Brak wyników.")
-    else:
-        controls = st.columns(3)
-
-        with controls[0]:
-            filter_mode = st.radio("Zakres", ["Zakres dat", "Wybrany dzień"], horizontal=False)
-            if filter_mode == "Zakres dat":
-                start = st.date_input("Od", value=pd.to_datetime(df["date"].min()).date())
-                end = st.date_input("Do", value=pd.to_datetime(df["date"].max()).date())
-            else:
-                single_day = st.date_input("Dzień", value=pd.to_datetime(df["date"].max()).date())
-
-        with controls[1]:
-            if role == "admin":
-                available_users = sorted(u for u in df["user"].dropna().unique())
-                patient = st.selectbox("Pacjent", ["— wybierz —"] + available_users)
-            else:
-                patient = username
-
-        with controls[2]:
-            if role == "admin":
+            with controls[2]:
                 if patient in (None, "— wybierz —"):
                     symptom_source = pd.Series(dtype=str)
                 else:
                     symptom_source = df.loc[df["user"] == patient, "objaw"]
+                my_symptoms = sorted(set(symptom_source.dropna().tolist()))
+                sym_opt = st.selectbox(
+                    "Objaw",
+                    ["(wszystkie)"] + my_symptoms,
+                    key="admin_results_symptom",
+                )
+
+            mask = pd.Series(True, index=df.index)
+            if filter_mode == "Zakres dat":
+                mask &= (pd.to_datetime(df["date"]) >= pd.to_datetime(start)) & (pd.to_datetime(df["date"]) <= pd.to_datetime(end))
             else:
-                symptom_source = df.loc[df["user"] == username, "objaw"]
-            my_symptoms = sorted(set(symptom_source.dropna().tolist()))
-            sym_opt = st.selectbox("Objaw", ["(wszystkie)"] + my_symptoms)
+                mask &= pd.to_datetime(df["date"]).dt.date == single_day
 
-        mask = pd.Series(True, index=df.index)
-        if filter_mode == "Zakres dat":
-            mask &= (pd.to_datetime(df["date"]) >= pd.to_datetime(start)) & (pd.to_datetime(df["date"]) <= pd.to_datetime(end))
-        else:
-            mask &= pd.to_datetime(df["date"]).dt.date == single_day
+            if sym_opt != "(wszystkie)":
+                mask &= (df["objaw"] == sym_opt)
 
-        if sym_opt != "(wszystkie)":
-            mask &= (df["objaw"] == sym_opt)
-
-        if role == "admin":
             if patient in (None, "— wybierz —"):
                 st.info("Wybierz pacjenta, aby zobaczyć wyniki.")
                 view = pd.DataFrame(columns=df.columns)
             else:
                 mask &= (df["user"] == patient)
                 view = df.loc[mask].copy()
+
+            if not view.empty:
+                view["date"] = pd.to_datetime(view["date"])
+                view = view.sort_values(["user", "date", "timestamp"])
+
+            st.dataframe(view, width="stretch")
+
+            if not view.empty:
+                fig, ax = plt.subplots()
+                ax.plot(view["date"], view["suma"], marker="o")
+                ax.set_xlabel("Data")
+                ax.set_ylabel("Suma Y‑BOCS")
+                ax.set_title(f"Nasilenie w czasie – {patient}")
+                st.pyplot(fig)
+
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button("Pobierz CSV", data=csv, file_name="wyniki_ocd.csv", mime="text/csv")
+else:
+    tabs = st.tabs(["Ocena nasilenia", "Wyniki"])
+    severity_tab, results_tab = tabs
+
+    with severity_tab:
+        st.header("Ocena nasilenia (Y‑BOCS)")
+        st.caption("Wybierz objaw przypisany przez terapeutę i oceń nasilenie z ostatniego tygodnia.")
+        user_list = load_user_symptoms(username)
+
+        if not user_list:
+            st.info("Brak przypisanych objawów. Skontaktuj się z terapeutą lub administratorem.")
         else:
+            def nice_label(raw: str) -> str:
+                try:
+                    grp, it = raw.split(":", 1)
+                    if it.startswith("INNE:"):
+                        return f"{grp} – {it[5:]}"
+                    return f"{grp} – {it}"
+                except ValueError:
+                    return raw
+
+            options = {nice_label(o): o for o in user_list}
+            sel_label = st.selectbox(
+                "Objaw",
+                ["— wybierz —"] + list(options.keys()),
+                key=widget_key_for(username, "severity_symptom_select"),
+            )
+            if sel_label != "— wybierz —":
+                selected_raw = options[sel_label]
+                st.subheader("Kwestionariusz – ostatni tydzień")
+                q_vals = {}
+                for idx, (q, choices) in enumerate(YBOCS_ITEMS, start=1):
+                    radio_key = widget_key_for(username, f"severity:{selected_raw}:q{idx}")
+                    val = st.radio(
+                        f"{idx}. {q}",
+                        options=list(range(5)),
+                        format_func=lambda i, ch=choices: f"{i} – {ch[i]}",
+                        horizontal=True,
+                        key=radio_key
+                    )
+                    q_vals[f"q{idx}"] = int(val)
+
+                suma = sum(q_vals.values())
+                st.markdown(f"**Suma punktów: {suma} / 40**")
+
+                if st.button("Zapisz wynik", type="primary"):
+                    row = {
+                        "timestamp": datetime.now().isoformat(timespec="seconds"),
+                        "date": date.today().isoformat(),
+                        "user": username,
+                        "role": role,
+                        "objaw": selected_raw,
+                        **{k: v for k, v in q_vals.items()},
+                        "suma": suma
+                    }
+                    append_result(row)
+                    st.success("Wynik zapisany.")
+
+    with results_tab:
+        st.header("Wyniki")
+        df = load_results()
+        if df.empty:
+            st.info("Brak wyników.")
+        else:
+            controls = st.columns(2)
+
+            with controls[0]:
+                filter_mode = st.radio("Zakres", ["Zakres dat", "Wybrany dzień"], horizontal=False)
+                if filter_mode == "Zakres dat":
+                    start = st.date_input("Od", value=pd.to_datetime(df["date"].min()).date())
+                    end = st.date_input("Do", value=pd.to_datetime(df["date"].max()).date())
+                else:
+                    single_day = st.date_input("Dzień", value=pd.to_datetime(df["date"].max()).date())
+
+            with controls[1]:
+                symptom_source = df.loc[df["user"] == username, "objaw"]
+                my_symptoms = sorted(set(symptom_source.dropna().tolist()))
+                sym_opt = st.selectbox(
+                    "Objaw",
+                    ["(wszystkie)"] + my_symptoms,
+                    key=widget_key_for(username, "results_symptom_select"),
+                )
+
+            mask = pd.Series(True, index=df.index)
+            if filter_mode == "Zakres dat":
+                mask &= (pd.to_datetime(df["date"]) >= pd.to_datetime(start)) & (pd.to_datetime(df["date"]) <= pd.to_datetime(end))
+            else:
+                mask &= pd.to_datetime(df["date"]).dt.date == single_day
+
             mask &= (df["user"] == username)
+
+            if sym_opt != "(wszystkie)":
+                mask &= (df["objaw"] == sym_opt)
+
             view = df.loc[mask].copy()
 
-        if not view.empty:
-            view["date"] = pd.to_datetime(view["date"])
-            view = view.sort_values(["user", "date", "timestamp"])
+            if not view.empty:
+                view["date"] = pd.to_datetime(view["date"])
+                view = view.sort_values(["date", "timestamp"])
 
-        st.dataframe(view, use_container_width=True)
+            st.dataframe(view, width="stretch")
 
-        if not view.empty:
-            fig, ax = plt.subplots()
-            ax.plot(view["date"], view["suma"], marker="o")
-            ax.set_xlabel("Data")
-            ax.set_ylabel("Suma Y‑BOCS")
-            title_user = patient if role == "admin" else username
-            ax.set_title(f"Nasilenie w czasie – {title_user}")
-            st.pyplot(fig)
-
-if role == "admin":
-    with tabs[1]:
-        st.header("Panel admina")
-        st.caption("Podgląd wyników wszystkich użytkowników oraz eksport.")
-        df = load_results()
-        st.dataframe(df, use_container_width=True)
-
-        csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button("Pobierz CSV", data=csv, file_name="wyniki_ocd.csv", mime="text/csv")
-
-        st.subheader("Objawy użytkowników")
-        users = [p.name for p in USER_STORE.iterdir() if p.is_dir()]
-        for u in sorted(users):
-            st.markdown(f"**{u}**")
-            try:
-                us = load_user_symptoms(u)
-                if us:
-                    st.write(us)
-                else:
-                    st.write("— brak —")
-            except Exception:
-                st.write("— błąd odczytu —")
+            if not view.empty:
+                fig, ax = plt.subplots()
+                ax.plot(view["date"], view["suma"], marker="o")
+                ax.set_xlabel("Data")
+                ax.set_ylabel("Suma Y‑BOCS")
+                ax.set_title("Nasilenie w czasie")
+                st.pyplot(fig)
