@@ -238,7 +238,8 @@ authenticator = stauth.Authenticate(
     cookie_expiry_days=7
 )
 
-name, authentication_status, username = authenticator.login("Zaloguj się", location="main")
+st.subheader("Zaloguj się")
+name, authentication_status, username = authenticator.login(location="main")
 
 if authentication_status is False:
     st.error("Błędny login lub hasło.")
