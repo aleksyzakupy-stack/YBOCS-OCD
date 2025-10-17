@@ -7,6 +7,7 @@ from datetime import datetime, date
 import json
 from pathlib import Path
 import matplotlib.pyplot as plt
+import hashlib
 
 APP_TITLE = "Ocena nasilenia OCD – Y‑BOCS (PL)"
 DATA_DIR = Path("data")
@@ -70,7 +71,7 @@ def register_user_ui(config: dict, authenticator: stauth.Authenticate):
         return
 
     display_name = f"{first_name_clean.title()} {letters_clean.upper()}"
-    hashed_password = stauth.Hasher([password]).generate()[0]
+    hashed_password = stauth.Hasher.hash(password)
 
     config['credentials']['usernames'][login_clean] = {
         "email": f"{login_clean}@example.com",
@@ -85,7 +86,7 @@ def register_user_ui(config: dict, authenticator: stauth.Authenticate):
 
     st.success("Konto zostało utworzone. Możesz się teraz zalogować.")
     st.session_state["just_registered_user"] = login_clean
-    st.experimental_rerun()
+    st.rerun()
 
 def get_user_dir(username: str) -> Path:
     d = USER_STORE / username
@@ -106,6 +107,12 @@ def load_user_symptoms(username: str) -> list:
 
 def save_user_symptoms(username: str, symptoms: list):
     user_symptoms_file(username).write_text(json.dumps(symptoms, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def widget_key_for(username: str, raw_key: str) -> str:
+    """Generate a stable, unique widget key for Streamlit elements."""
+    digest = hashlib.sha1(f"{username}:{raw_key}".encode("utf-8")).hexdigest()
+    return f"widget_{digest}"
 
 def init_results_file():
     if not RESULTS_FILE.exists():
@@ -303,16 +310,21 @@ authenticator = stauth.Authenticate(
     cookie_expiry_days=7
 )
 
-login_response = authenticator.login("Zaloguj się", "main")
+authenticator.login(
+    location="main",
+    fields={
+        "Form name": "Zaloguj się",
+        "Username": "Login",
+        "Password": "Hasło",
+        "Login": "Zaloguj się"
+    }
+)
 
-if login_response is None:
-    name = ""
-    username = ""
-    authentication_status = None
-else:
-    name, authentication_status, username = login_response
+name = st.session_state.get("name", "")
+username = st.session_state.get("username", "")
+authentication_status = st.session_state.get("authentication_status")
+
 st.subheader("Zaloguj się")
-name, authentication_status, username = authenticator.login(location="main")
 
 if authentication_status is False:
     st.error("Błędny login lub hasło.")
@@ -347,25 +359,46 @@ if role != "admin":
         user_list = load_user_symptoms(username)
         selected = set(user_list)
 
+        widget_user = username or "anon"
         for group, items in SYMPTOMS.items():
             with st.expander(group, expanded=False):
                 new_vals = []
-                for it in items:
-                    key = f"{group}:{it}"
-                    checked = st.checkbox(it, value=(key in selected))
-                    if checked:
-                        new_vals.append(key)
-                # Handle "Inne" free text for each group
+                group_prefix = f"{group}:"
                 inne_key = f"{group}:Inne (dopisz w polu poniżej)"
-                if inne_key in new_vals:
-                    custom = st.text_input(f"Inne – {group}", value="", placeholder="Opisz własnymi słowami…")
-                    if custom.strip():
-                        new_vals.append(f"{group}:INNE:{custom.strip()}")
+                custom_entries = [k for k in selected if k.startswith(f"{group}:INNE:")]
+                stored_custom_text = custom_entries[0].split(":", 2)[2] if custom_entries else ""
+                inne_selected_stored = inne_key in selected
+                inne_default_checked = inne_selected_stored or bool(custom_entries)
+
+                for it in items:
+                    base_key = f"{group}:{it}"
+                    widget_key = widget_key_for(widget_user, base_key)
+                    if it.startswith("Inne"):
+                        checked = st.checkbox(it, value=inne_default_checked, key=widget_key)
+                        text_key = f"{widget_key}_text"
+                        if checked:
+                            custom_input = st.text_input(
+                                f"Inne – {group}",
+                                value=stored_custom_text,
+                                placeholder="Opisz własnymi słowami…",
+                                key=text_key,
+                            )
+                            custom_input_clean = custom_input.strip()
+                            if custom_input_clean:
+                                new_vals.append(f"{group}:INNE:{custom_input_clean}")
+                            else:
+                                new_vals.append(inne_key)
+                        else:
+                            if text_key in st.session_state:
+                                st.session_state.pop(text_key)
+                    else:
+                        checked = st.checkbox(it, value=(base_key in selected), key=widget_key)
+                        if checked:
+                            new_vals.append(base_key)
 
                 # merge new selections for this group
-                # remove stale keys of this group from selected, then add new
                 for k in list(selected):
-                    if k.startswith(f"{group}:"):
+                    if k.startswith(group_prefix):
                         selected.discard(k)
                 for k in new_vals:
                     selected.add(k)
