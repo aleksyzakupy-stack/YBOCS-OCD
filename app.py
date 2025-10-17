@@ -303,7 +303,7 @@ authenticator = stauth.Authenticate(
     cookie_expiry_days=7
 )
 
-login_response = authenticator.login("Zaloguj się", "main")
+login_response = authenticator.login(location="main")
 
 if login_response is None:
     name = ""
@@ -312,7 +312,6 @@ if login_response is None:
 else:
     name, authentication_status, username = login_response
 st.subheader("Zaloguj się")
-name, authentication_status, username = authenticator.login(location="main")
 
 if authentication_status is False:
     st.error("Błędny login lub hasło.")
