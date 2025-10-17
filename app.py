@@ -303,14 +303,20 @@ authenticator = stauth.Authenticate(
     cookie_expiry_days=7
 )
 
-login_response = authenticator.login(location="main")
+authenticator.login(
+    location="main",
+    fields={
+        "Form name": "Zaloguj się",
+        "Username": "Login",
+        "Password": "Hasło",
+        "Login": "Zaloguj się"
+    }
+)
 
-if login_response is None:
-    name = ""
-    username = ""
-    authentication_status = None
-else:
-    name, authentication_status, username = login_response
+name = st.session_state.get("name", "")
+username = st.session_state.get("username", "")
+authentication_status = st.session_state.get("authentication_status")
+
 st.subheader("Zaloguj się")
 
 if authentication_status is False:
