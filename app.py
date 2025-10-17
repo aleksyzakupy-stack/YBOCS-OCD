@@ -311,6 +311,8 @@ if login_response is None:
     authentication_status = None
 else:
     name, authentication_status, username = login_response
+st.subheader("Zaloguj się")
+name, authentication_status, username = authenticator.login(location="main")
 
 if authentication_status is False:
     st.error("Błędny login lub hasło.")
