@@ -85,7 +85,7 @@ def register_user_ui(config: dict, authenticator: stauth.Authenticate):
 
     st.success("Konto zostało utworzone. Możesz się teraz zalogować.")
     st.session_state["just_registered_user"] = login_clean
-    st.experimental_rerun()
+    st.rerun()
 
 def get_user_dir(username: str) -> Path:
     d = USER_STORE / username
