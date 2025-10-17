@@ -70,7 +70,7 @@ def register_user_ui(config: dict, authenticator: stauth.Authenticate):
         return
 
     display_name = f"{first_name_clean.title()} {letters_clean.upper()}"
-    hashed_password = stauth.Hasher([password]).generate()[0]
+    hashed_password = stauth.Hasher.hash(password)
 
     config['credentials']['usernames'][login_clean] = {
         "email": f"{login_clean}@example.com",
