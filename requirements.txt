@@ -1,0 +1,5 @@
+streamlit>=1.38
+streamlit-authenticator>=0.3
+PyYAML>=6.0.1
+pandas>=2.2
+matplotlib>=3.8

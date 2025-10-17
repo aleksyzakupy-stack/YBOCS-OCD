@@ -1,0 +1,12 @@
+credentials:
+  usernames:
+    admin:
+      email: admin@example.com
+      name: Administrator
+      password: '$2b$12$0j6qg2i7tQ0u9pGvVQ5t2e9o6vQq1n6GZCw8p1aKcY4Xv0y0k0VxG'
+      role: admin
+    user1:
+      email: user1@example.com
+      name: Użytkownik 1
+      password: '$2b$12$0j6qg2i7tQ0u9pGvVQ5t2e9o6vQq1n6GZCw8p1aKcY4Xv0y0k0VxG'
+      role: user
