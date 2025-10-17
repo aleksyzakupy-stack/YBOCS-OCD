@@ -70,7 +70,7 @@ def register_user_ui(config: dict, authenticator: stauth.Authenticate):
         return
 
     display_name = f"{first_name_clean.title()} {letters_clean.upper()}"
-    hashed_password = stauth.Hasher([password]).generate()[0]
+    hashed_password = stauth.Hasher.hash(password)
 
     config['credentials']['usernames'][login_clean] = {
         "email": f"{login_clean}@example.com",
@@ -85,7 +85,7 @@ def register_user_ui(config: dict, authenticator: stauth.Authenticate):
 
     st.success("Konto zostało utworzone. Możesz się teraz zalogować.")
     st.session_state["just_registered_user"] = login_clean
-    st.experimental_rerun()
+    st.rerun()
 
 def get_user_dir(username: str) -> Path:
     d = USER_STORE / username
@@ -303,16 +303,21 @@ authenticator = stauth.Authenticate(
     cookie_expiry_days=7
 )
 
-login_response = authenticator.login("Zaloguj się", "main")
+authenticator.login(
+    location="main",
+    fields={
+        "Form name": "Zaloguj się",
+        "Username": "Login",
+        "Password": "Hasło",
+        "Login": "Zaloguj się"
+    }
+)
 
-if login_response is None:
-    name = ""
-    username = ""
-    authentication_status = None
-else:
-    name, authentication_status, username = login_response
+name = st.session_state.get("name", "")
+username = st.session_state.get("username", "")
+authentication_status = st.session_state.get("authentication_status")
+
 st.subheader("Zaloguj się")
-name, authentication_status, username = authenticator.login(location="main")
 
 if authentication_status is False:
     st.error("Błędny login lub hasło.")
