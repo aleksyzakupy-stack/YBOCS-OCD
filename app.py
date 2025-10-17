@@ -25,6 +25,68 @@ def load_credentials():
         config = yaml.load(f, Loader=SafeLoader)
     return config
 
+
+def save_credentials(config: dict):
+    with open("users.yaml", "w", encoding="utf-8") as f:
+        yaml.safe_dump(config, f, allow_unicode=True, sort_keys=False)
+
+
+def register_user_ui(config: dict, authenticator: stauth.Authenticate):
+    st.subheader("Rejestracja użytkownika")
+    st.caption("Podaj imię, trzy pierwsze litery nazwiska, unikalny login oraz hasło.")
+
+    with st.form("register_form"):
+        first_name = st.text_input("Imię", max_chars=50)
+        surname_letters = st.text_input("Pierwsze trzy litery nazwiska", max_chars=3)
+        login = st.text_input("Login", max_chars=32)
+        password = st.text_input("Hasło", type="password")
+        password_repeat = st.text_input("Powtórz hasło", type="password")
+        submitted = st.form_submit_button("Zarejestruj")
+
+    if not submitted:
+        return
+
+    errors = []
+    first_name_clean = first_name.strip()
+    letters_clean = surname_letters.strip().replace(" ", "")
+    login_clean = login.strip()
+
+    if not first_name_clean:
+        errors.append("Imię jest wymagane.")
+    if len(letters_clean) != 3 or not letters_clean.isalpha():
+        errors.append("Podaj dokładnie trzy litery nazwiska (bez znaków specjalnych).")
+    if not login_clean:
+        errors.append("Login jest wymagany.")
+    elif login_clean in config['credentials']['usernames']:
+        errors.append("Taki login już istnieje.")
+    if not password:
+        errors.append("Hasło jest wymagane.")
+    elif password != password_repeat:
+        errors.append("Hasła muszą być identyczne.")
+
+    if errors:
+        for err in errors:
+            st.error(err)
+        return
+
+    display_name = f"{first_name_clean.title()} {letters_clean.upper()}"
+    hashed_password = stauth.Hasher([password]).generate()[0]
+
+    config['credentials']['usernames'][login_clean] = {
+        "email": f"{login_clean}@example.com",
+        "name": display_name,
+        "password": hashed_password,
+        "role": "user",
+    }
+
+    save_credentials(config)
+    if hasattr(authenticator, "credentials"):
+        authenticator.credentials = config['credentials']
+
+    st.success("Konto zostało utworzone. Możesz się teraz zalogować.")
+    st.session_state["just_registered_user"] = login_clean
+    st.experimental_rerun()
+
 def get_user_dir(username: str) -> Path:
     d = USER_STORE / username
     d.mkdir(parents=True, exist_ok=True)
@@ -231,6 +293,9 @@ YBOCS_ITEMS = [
 # ---------- Auth ----------
 ensure_dirs()
 credentials = load_credentials()
+
+# Make sure expected structure exists
+credentials.setdefault('credentials', {}).setdefault('usernames', {})
 authenticator = stauth.Authenticate(
     credentials['credentials'],
     cookie_name="ocd_app_cookie",
@@ -238,14 +303,27 @@ authenticator = stauth.Authenticate(
     cookie_expiry_days=7
 )
 
+login_response = authenticator.login("Zaloguj się", "main")
+
+if login_response is None:
+    name = ""
+    username = ""
+    authentication_status = None
+else:
+    name, authentication_status, username = login_response
 st.subheader("Zaloguj się")
 name, authentication_status, username = authenticator.login(location="main")
 
 if authentication_status is False:
     st.error("Błędny login lub hasło.")
+    register_user_ui(credentials, authenticator)
     st.stop()
 elif authentication_status is None:
     st.info("Wprowadź dane logowania.")
+    if st.session_state.get("just_registered_user"):
+        st.success(f"Użytkownik **{st.session_state['just_registered_user']}** został utworzony. Zaloguj się.")
+        st.session_state.pop("just_registered_user")
+    register_user_ui(credentials, authenticator)
     st.stop()
 
 role = credentials['credentials']['usernames'].get(username, {}).get("role", "user")
