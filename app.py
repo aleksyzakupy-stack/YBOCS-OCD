@@ -34,7 +34,10 @@ def save_credentials(config: dict):
 
 def admin_create_user_ui(config: dict, authenticator: stauth.Authenticate):
     st.subheader("Dodaj nowego pacjenta")
-    st.caption("Podaj dane logowania pacjenta. Po zapisaniu przekaż pacjentowi login i hasło.")
+    st.caption(
+        "Podaj dane pacjenta. Przy pierwszym logowaniu pacjent wpisze własne hasło, "
+        "pozostawiając pole hasła w formularzu logowania puste."
+    )
 
     with st.form("register_form"):
         first_name = st.text_input("Imię", max_chars=50)
@@ -64,7 +67,7 @@ def admin_create_user_ui(config: dict, authenticator: stauth.Authenticate):
         return
 
     display_name = f"{first_name_clean.title()} {letters_clean.upper()}"
-    hashed_password = stauth.Hasher.hash(password)
+    hashed_password = stauth.Hasher.hash("")
 
     config['credentials']['usernames'][login_clean] = {
         "email": f"{login_clean}@example.com",
@@ -78,7 +81,10 @@ def admin_create_user_ui(config: dict, authenticator: stauth.Authenticate):
     if hasattr(authenticator, "credentials"):
         authenticator.credentials = config['credentials']
 
-    st.success(f"Dodano pacjenta **{display_name}** (login: {login_clean}).")
+    st.success(
+        f"Dodano pacjenta **{display_name}** (login: {login_clean}). "
+        "Przekaż login i poinformuj o pustym haśle przy pierwszym logowaniu."
+    )
     st.rerun()
 
 def get_user_dir(username: str) -> Path:
@@ -373,6 +379,15 @@ authentication_status = st.session_state.get("authentication_status")
 
 st.subheader("Zaloguj się")
 
+reset_msg = st.session_state.pop("password_reset_done", None)
+if reset_msg:
+    st.success(reset_msg)
+
+st.caption(
+    "Nowi pacjenci logują się po raz pierwszy, pozostawiając pole hasła puste. "
+    "Po zalogowaniu zostaną poproszeni o ustawienie własnego hasła."
+)
+
 if authentication_status is False:
     st.error("Błędny login lub hasło.")
     st.info("Jeśli nie masz konta, skontaktuj się z administratorem aplikacji.")
@@ -422,6 +437,7 @@ authenticator.logout("Wyloguj", "sidebar")
 st.sidebar.write(f"Zalogowano: **{name}**  \nRola: **{role}**")
 
 if role == "admin":
+    admin_widget_user = username or "admin"
     tabs = st.tabs(["Pacjenci", "Objawy pacjentów", "Wyniki pacjentów"])
     patients_tab, symptoms_tab, results_tab = tabs
 
@@ -435,7 +451,8 @@ if role == "admin":
             users_rows.append({
                 "Login": login,
                 "Nazwa": data.get("name", ""),
-                "Rola": data.get("role", "user")
+                "Rola": data.get("role", "user"),
+                "Hasło ustawione": "Nie" if data.get("force_password_reset") else "Tak",
             })
         if users_rows:
             users_df = pd.DataFrame(users_rows)
@@ -456,7 +473,11 @@ if role == "admin":
             patient_lookup = dict(patient_options)
             display_to_login = {f"{name} ({login})": login for login, name in patient_options}
             labels = list(display_to_login.keys())
-            selected_label = st.selectbox("Pacjent", ["— wybierz —"] + labels)
+            selected_label = st.selectbox(
+                "Pacjent",
+                ["— wybierz —"] + labels,
+                key=widget_key_for(admin_widget_user, "symptoms_patient_select"),
+            )
             selected_patient = display_to_login.get(selected_label)
 
             if selected_patient:
@@ -488,7 +509,11 @@ if role == "admin":
                 ]
                 patient_display = {f"{name} ({login})": login for login, name in patient_options}
                 patient_labels = ["— wybierz —"] + list(patient_display.keys())
-                selected_label = st.selectbox("Pacjent", patient_labels)
+                selected_label = st.selectbox(
+                    "Pacjent",
+                    patient_labels,
+                    key=widget_key_for(admin_widget_user, "results_patient_select"),
+                )
                 patient = patient_display.get(selected_label)
 
             with controls[2]:
@@ -497,7 +522,11 @@ if role == "admin":
                 else:
                     symptom_source = df.loc[df["user"] == patient, "objaw"]
                 my_symptoms = sorted(set(symptom_source.dropna().tolist()))
-                sym_opt = st.selectbox("Objaw", ["(wszystkie)"] + my_symptoms)
+                sym_opt = st.selectbox(
+                    "Objaw",
+                    ["(wszystkie)"] + my_symptoms,
+                    key=widget_key_for(admin_widget_user, "results_symptom_select"),
+                )
 
             mask = pd.Series(True, index=df.index)
             if filter_mode == "Zakres dat":
@@ -553,7 +582,11 @@ else:
                     return raw
 
             options = {nice_label(o): o for o in user_list}
-            sel_label = st.selectbox("Objaw", ["— wybierz —"] + list(options.keys()))
+            sel_label = st.selectbox(
+                "Objaw",
+                ["— wybierz —"] + list(options.keys()),
+                key=widget_key_for(username, "severity_symptom_select"),
+            )
             if sel_label != "— wybierz —":
                 selected_raw = options[sel_label]
                 st.subheader("Kwestionariusz – ostatni tydzień")
@@ -604,7 +637,11 @@ else:
             with controls[1]:
                 symptom_source = df.loc[df["user"] == username, "objaw"]
                 my_symptoms = sorted(set(symptom_source.dropna().tolist()))
-                sym_opt = st.selectbox("Objaw", ["(wszystkie)"] + my_symptoms)
+                sym_opt = st.selectbox(
+                    "Objaw",
+                    ["(wszystkie)"] + my_symptoms,
+                    key=widget_key_for(username, "results_symptom_select"),
+                )
 
             mask = pd.Series(True, index=df.index)
             if filter_mode == "Zakres dat":
